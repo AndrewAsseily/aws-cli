@@ -325,7 +325,7 @@ class BaseIMDSRegionTest(unittest.TestCase):
         self._send = self._urllib3_patch.start()
         self._imds_responses = []
         self._send.side_effect = self.get_imds_response
-        self._region = 'us-mars-1a'
+        self._region = 'us-mars-1'
         self.environ = {}
         self.environ_patch = mock.patch('os.environ', self.environ)
         self.environ_patch.start()

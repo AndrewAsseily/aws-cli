@@ -68,7 +68,7 @@ class TestSession(BaseCLIDriverTest):
         self.add_response(None)
         # Then another response from the IMDS server for an availability
         # zone.
-        self.add_response(b'us-mars-2a')
+        self.add_response(b'us-mars-2')
         # Once a region is fetched form the IMDS server we need to mock an
         # XML response from ec2 so that the CLI driver doesn't throw an error
         # during parsing.
@@ -87,7 +87,7 @@ class TestSession(BaseCLIDriverTest):
         self.add_response(b'token')
         # Then another response from the IMDS server for an availability
         # zone.
-        self.add_response(b'us-mars-2a')
+        self.add_response(b'us-mars-2')
         # Once a region is fetched form the IMDS server we need to mock an
         # XML response from ec2 so that the CLI driver doesn't throw an error
         # during parsing.
