@@ -131,6 +131,7 @@ from awscli.customizations.translate import (
 from awscli.customizations.waiters import register_add_waiters
 from awscli.customizations.wizard.commands import register_wizard_commands
 from awscli.paramfile import register_uri_param_handler
+from awscli.customizations.learn import initialize as learn_init
 
 
 def awscli_initialize(event_handlers):
@@ -237,3 +238,4 @@ def awscli_initialize(event_handlers):
     register_kinesis_list_streams_pagination_backcompat(event_handlers)
     register_quicksight_asset_bundle_customizations(event_handlers)
     register_ec2_instance_connect_commands(event_handlers)
+    learn_init(event_handlers)
