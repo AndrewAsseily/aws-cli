@@ -2,6 +2,7 @@
   "service": "s3",
   "name": "S3 Basics",
   "description": "Learn basic S3 operations",
+  "credentials_required": true,
   "variables": {
     "bucket-name": {
       "description": "Name of the S3 bucket",
@@ -54,7 +55,7 @@
         "success_pattern": "hello.txt"
       },
       "cleanup": {
-        "command": "aws s3 rm s3://{bucket-name}/hello.txt && rm hello.txt",
+        "command": "aws s3 rm s3://{bucket-name}/hello.txt",
         "description": "Remove the uploaded file and local copy",
         "required": false
       }

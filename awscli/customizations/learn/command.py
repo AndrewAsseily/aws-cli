@@ -11,8 +11,9 @@ LOG = logging.getLogger(__name__)
 
 
 class TutorialManager:
-    def __init__(self):
+    def __init__(self, session):
         self.tutorials = self._load_tutorials()
+        self._session = session
         self.variables = {}
 
     def _load_tutorials(self):
@@ -44,31 +45,116 @@ class TutorialManager:
                     return False
         return True
 
+    def _check_credentials(self):
+        """Check if AWS credentials are configured and valid."""
+        try:
+            sts_client = self._session.create_client('sts')
+            sts_client.get_caller_identity()
+            return True
+        except Exception as e:
+            LOG.debug(f"Credential check failed: {e}")
+            return False
+
     def run_tutorial(self, service):
         if service not in self.tutorials:
             print(f"Tutorial for {service} not found.")
             return 1
 
         tutorial = self.tutorials[service]
+
+        if tutorial.get('credentials_required', False):
+            if not self._check_credentials():
+                print("\nError: This tutorial requires valid AWS credentials.")
+                print("Please configure your AWS credentials using: aws configure")
+                print("For more information, visit: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-quickstart.html#getting-started-quickstart-new")
+                print("\nOnce configured, try the tutorial again.")
+                return 1
+
         print(f"\nWelcome to {tutorial['name']}!")
         print(tutorial['description'])
 
         completed_steps = []
-        cleanup_steps = []
 
+        # Main tutorial steps
         for step in tutorial['steps']:
             if not self._run_step(step):
                 print("\nTutorial ended prematurely.")
-                self._run_cleanup(cleanup_steps)
                 return 1
             completed_steps.append(step['id'])
-            if 'cleanup' in step:
-                cleanup_steps.append(step['cleanup'])
 
         print("\nCongratulations! You've completed all the steps.")
-        print("\nNow, let's clean up the resources we created.")
+        print("\nNow let's clean up the resources we created.")
 
-        self._run_cleanup(cleanup_steps)
+        # Cleanup steps
+        for step in reversed(tutorial['steps']):
+            if 'cleanup' in step:
+                cleanup = step['cleanup']
+                print(f"\n[Cleanup] {cleanup['description']}")
+
+                # Replace variables in command
+                command_template = cleanup['command']
+                command = self._replace_variables(command_template)
+                print(f"$ Try: {command}")
+
+                while True:
+                    try:
+                        user_input = input("> ").strip()
+
+                        if not user_input:
+                            continue
+                        if user_input.lower() in ['quit', 'exit']:
+                            return False
+                        if user_input.lower() == 'skip':
+                            if cleanup.get('required', False):
+                                print("This cleanup step is required and cannot be skipped.")
+                                continue
+                            print("Skipping cleanup step...")
+                            break
+
+                        # Handle compound commands
+                        if '&&' in user_input:
+                            commands = [cmd.strip() for cmd in user_input.split('&&')]
+                            success = True
+                            for cmd in commands:
+                                result = subprocess.run(
+                                    shlex.split(cmd),
+                                    capture_output=True,
+                                    text=True
+                                )
+                                if result.stdout:
+                                    print(result.stdout.rstrip())
+                                if result.stderr:
+                                    print(result.stderr.rstrip())
+                                if result.returncode != 0:
+                                    success = False
+                                    break
+                            if success:
+                                print("\nCleanup step completed successfully.")
+                                break
+                        else:
+                            result = subprocess.run(
+                                shlex.split(user_input),
+                                capture_output=True,
+                                text=True
+                            )
+                            if result.stdout:
+                                print(result.stdout.rstrip())
+                            if result.stderr:
+                                print(result.stderr.rstrip())
+                            if result.returncode == 0:
+                                print("\nCleanup step completed successfully.")
+                                break
+
+                        print(f"\nCleanup failed. Please try again:")
+                        print(f"$ {command}")
+
+                    except KeyboardInterrupt:
+                        print("\nUse 'quit' to exit the tutorial")
+                        continue
+                    except Exception as e:
+                        print(f"Error executing command: {e}")
+                        print(f"\nPlease try again:")
+                        print(f"$ {command}")
 
         print("\nTutorial completed successfully!")
         return 0
@@ -186,10 +272,9 @@ class LearnCommand(BasicCommand):
 
     def __init__(self, session):
         super().__init__(session)
-        self.tutorial_manager = TutorialManager()
+        self.tutorial_manager = TutorialManager(session)
 
     def _run_main(self, parsed_args, parsed_globals):
-        LOG.debug("Running learn command with args: %s", parsed_args)
         return self._run_main_command(parsed_args, parsed_globals)
 
     def _run_main_command(self, parsed_args, parsed_globals):

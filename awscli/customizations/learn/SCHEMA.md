@@ -5,6 +5,7 @@ Tutorial Schema:
         "<service-name>": {                     # e.g., "s3", "iam", "ec2"
             "name": string,                     # Display name of the tutorial
             "description": string,              # Brief description of what will be learned
+            "credentials_required": true,
             "variables": {                      # Definitions of variables used in commands
                 "<variable-name>": {
                     "description": string,      # Description of what this variable represents
