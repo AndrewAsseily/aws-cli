@@ -6,6 +6,8 @@ from awscli.arguments import CustomArgument
 import subprocess
 import shlex
 import re
+from .validate_schema import validate_schema, TUTORIAL_SCHEMA
+
 
 LOG = logging.getLogger(__name__)
 
@@ -13,21 +15,35 @@ LOG = logging.getLogger(__name__)
 class TutorialManager:
     def __init__(self, session):
         self.tutorials = self._load_tutorials()
-        self._session = session
         self.variables = {}
+        self._session = session
 
     def _load_tutorials(self):
         tutorials = {}
         tutorial_index_path = Path(__file__).parent / 'tutorials.json'
 
-        with open(tutorial_index_path) as f:
-            tutorial_files = json.load(f)['tutorial_files']
+        try:
+            with open(tutorial_index_path) as f:
+                tutorial_files = json.load(f)['tutorial_files']
 
-        for file_name in tutorial_files:
-            file_path = Path(__file__).parent / file_name
-            with open(file_path) as f:
-                tutorial_data = json.load(f)
-                tutorials[tutorial_data['service']] = tutorial_data
+            for file_name in tutorial_files:
+                file_path = Path(__file__).parent / file_name
+                try:
+                    with open(file_path) as f:
+                        tutorial_data = json.load(f)
+
+                    errors = validate_schema(tutorial_data, TUTORIAL_SCHEMA)
+                    if errors:
+                        raise ValueError("Schema validation failed:\n" + "\n".join(errors))
+
+                    tutorials[tutorial_data['service']] = tutorial_data
+                except Exception as e:
+                    LOG.error(f"Error loading tutorial {file_name}: {e}")
+                    raise
+
+        except Exception as e:
+            LOG.error(f"Error loading tutorials: {e}")
+            raise
 
         return tutorials
 
