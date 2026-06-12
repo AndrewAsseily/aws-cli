@@ -10,6 +10,10 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
+import base64
+import hashlib
+
+from awscrt.crypto import EC
 from botocore.compat import parse_qs, urlparse
 
 from awscli.testutils import BaseAWSCommandParamsTest, FileCreator, mock
@@ -202,3 +206,99 @@ class TestSignPKCS8(BaseAWSCommandParamsTest):
         self.assertDesiredUrl(
             self.run_cmd(cmdline)[0], 'http://example.com/hi', expected_params
         )
+
+
+class TestCreateSignerFromKeyUnsupportedKeyType(BaseAWSCommandParamsTest):
+    prefix = 'cloudfront sign --key-pair-id my_id --url http://example.com/hi '
+
+    def setUp(self):
+        self.files = FileCreator()
+        self.addCleanup(self.files.remove_all)
+        super().setUp()
+
+    def test_unsupported_key_type_raises_error(self):
+        unsupported_key = (
+            '-----BEGIN OPENSSH PRIVATE KEY-----\n'
+            'b3BlbnNzaC1rZXktdjEAAAAABG5vbmU=\n'
+            '-----END OPENSSH PRIVATE KEY-----\n'
+        )
+        key_file = self.files.create_file('bad.pem', unsupported_key)
+        cmdline = (
+            self.prefix
+            + '--private-key file://'
+            + key_file
+            + ' --date-less-than 2016-1-1'
+        )
+        _, stderr, rc = self.run_cmd(cmdline, expected_rc=255)
+        self.assertIn('Unsupported key type', stderr)
+
+
+class TestSignECDSA(BaseAWSCommandParamsTest):
+    # An EC P-256 private key only for testing purpose.
+    private_key = (
+        '-----BEGIN EC PRIVATE KEY-----\n'
+        'MHcCAQEEILDM8T6/cM6ptxLcvpX3hxeHkXwHSQi+q+Z/fwMl+fGloAoGCCqGSM49\n'
+        'AwEHoUQDQgAEUFBuZzlCHkBAba7efyu5RZO9SU7QLahpLudCKRm2jBvCOvX5YMkY\n'
+        'P3EaLnCseMoE8L1k4z2GcYKpgE2Q8K+pRQ==\n'
+        '-----END EC PRIVATE KEY-----\n'
+    )
+    prefix = 'cloudfront sign --key-pair-id my_id --url http://example.com/hi '
+
+    def setUp(self):
+        files = FileCreator()
+        self.private_key_file = files.create_file('ec.pem', self.private_key)
+        self.addCleanup(files.remove_all)
+        super().setUp()
+
+    def _decode_cf_signature(self, encoded_sig):
+        """Reverse CloudFront's URL-safe base64 encoding."""
+        b64 = encoded_sig.replace('-', '+').replace('_', '=').replace('~', '/')
+        return base64.b64decode(b64)
+
+    def _load_ec_key(self):
+        lines = self.private_key.strip().splitlines()
+        der_b64 = ''.join(
+            line for line in lines if not line.startswith('-----')
+        )
+        return EC.new_key_from_der_data(base64.b64decode(der_b64))
+
+    def _verify_signature(self, url, policy_bytes):
+        """Verify the ECDSA signature in the URL against the policy."""
+        params = parse_qs(urlparse(url.strip()).query)
+        sig_bytes = self._decode_cf_signature(params['Signature'][0])
+        ec_key = self._load_ec_key()
+        digest = hashlib.sha256(policy_bytes).digest()
+        self.assertTrue(ec_key.verify(digest, sig_bytes))
+
+    def test_canned_policy(self):
+        cmdline = (
+            self.prefix
+            + '--private-key file://'
+            + self.private_key_file
+            + ' --date-less-than 2016-1-1'
+        )
+        stdout = self.run_cmd(cmdline)[0]
+        params = parse_qs(urlparse(stdout.strip()).query)
+        self.assertEqual(params['Key-Pair-Id'], ['my_id'])
+        self.assertEqual(params['Expires'], ['1451606400'])
+        # Reconstruct the canned policy that was signed
+        policy = (
+            '{"Statement":[{"Resource":"http://example.com/hi",'
+            '"Condition":{"DateLessThan":{"AWS:EpochTime":1451606400}}}]}'
+        )
+        self._verify_signature(stdout, policy.encode('utf8'))
+
+    def test_custom_policy(self):
+        cmdline = (
+            self.prefix
+            + '--private-key file://'
+            + self.private_key_file
+            + ' --date-less-than 2016-1-1 --ip-address 12.34.56.78'
+        )
+        stdout = self.run_cmd(cmdline)[0]
+        params = parse_qs(urlparse(stdout.strip()).query)
+        self.assertEqual(params['Key-Pair-Id'], ['my_id'])
+        self.assertIn('Policy', params)
+        # Decode the policy from the URL and verify signature against it
+        policy_bytes = self._decode_cf_signature(params['Policy'][0])
+        self._verify_signature(stdout, policy_bytes)

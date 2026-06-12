@@ -10,15 +10,15 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
+import base64
 import hashlib
 import random
 import sys
 import time
 
+from awscrt.crypto import EC, RSA, RSASignatureAlgorithm
 from botocore.signers import CloudFrontSigner
 from botocore.utils import parse_to_aware_datetime
-
-from awscrt.crypto import RSA, RSASignatureAlgorithm
 
 from awscli.arguments import CustomArgument
 from awscli.customizations.commands import BasicCommand
@@ -226,7 +226,10 @@ def _add_sign(command_table, session, **kwargs):
 
 class SignCommand(BasicCommand):
     NAME = 'sign'
-    DESCRIPTION = 'Sign a given url.'
+    DESCRIPTION = (
+        'Sign a given url. Supports RSA and ECDSA private keys. '
+        'The key type is auto-detected from the PEM header.'
+    )
     DATE_FORMAT = """Supported formats include:
         YYYY-MM-DD (which means 0AM UTC of that day),
         YYYY-MM-DDThh:mm:ss (with default timezone as UTC),
@@ -251,7 +254,11 @@ class SignCommand(BasicCommand):
         {
             'name': 'private-key',
             'required': True,
-            'help_text': 'file://path/to/your/private-key.pem',
+            'help_text': (
+                'file://path/to/your/private-key.pem. '
+                'Supported key types: RSA (PKCS#1 or PKCS#8) and '
+                'ECDSA (SEC1/PEM).'
+            ),
         },
         {
             'name': 'date-less-than',
@@ -275,7 +282,7 @@ class SignCommand(BasicCommand):
 
     def _run_main(self, args, parsed_globals):
         signer = CloudFrontSigner(
-            args.key_pair_id, RSASigner(args.private_key).sign
+            args.key_pair_id, create_signer_from_key(args.private_key)
         )
         date_less_than = parse_to_aware_datetime(args.date_less_than)
         date_greater_than = args.date_greater_than
@@ -300,13 +307,50 @@ class SignCommand(BasicCommand):
         return 0
 
 
+def create_signer_from_key(private_key):
+    """Auto-detect key type from PEM headers and return the appropriate sign callable."""
+    if 'BEGIN EC PRIVATE KEY' in private_key:
+        return ECDSASigner(private_key).sign
+    if 'BEGIN RSA PRIVATE KEY' in private_key:
+        return RSASigner(private_key).sign
+    if 'BEGIN PRIVATE KEY' in private_key:
+        return RSASigner(private_key).sign
+    raise ValueError(
+        "Unsupported key type. Supported formats: "
+        "RSA (PKCS#1 or PKCS#8) and EC (SEC1). "
+        "Check that your key file has a valid PEM header."
+    )
+
+
 class RSASigner:
     def __init__(self, private_key):
         key_bytes = private_key.encode('utf8')
-        self.priv_key = RSA.new_private_key_from_pem_data(key_bytes)
+        try:
+            self.priv_key = RSA.new_private_key_from_pem_data(key_bytes)
+        except RuntimeError as e:
+            if 'AWS_ERROR_CAL_UNSUPPORTED_KEY_FORMAT' in str(e):
+                raise ValueError(
+                    "Failed to load private key. If you are using an ECDSA "
+                    "key in PKCS#8 format (BEGIN PRIVATE KEY), it may need "
+                    "to be converted to SEC1 format (BEGIN EC PRIVATE KEY)."
+                ) from e
+            raise
 
     def sign(self, message):
         return self.priv_key.sign(
-            RSASignatureAlgorithm.PKCS1_5_SHA1,
-            hashlib.sha1(message).digest()
+            RSASignatureAlgorithm.PKCS1_5_SHA1, hashlib.sha1(message).digest()
         )
+
+
+class ECDSASigner:
+    def __init__(self, private_key):
+        # Strip PEM headers and decode base64 to get raw DER bytes
+        lines = private_key.strip().splitlines()
+        der_b64 = ''.join(
+            line for line in lines if not line.startswith('-----')
+        )
+        der_data = base64.b64decode(der_b64)
+        self.priv_key = EC.new_key_from_der_data(der_data)
+
+    def sign(self, message):
+        return self.priv_key.sign(hashlib.sha256(message).digest())

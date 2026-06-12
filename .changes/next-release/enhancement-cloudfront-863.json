@@ -1,0 +1,5 @@
+{
+  "type": "enhancement",
+  "category": "``cloudfront``",
+  "description": "Add ECDSA support for CloudFront signed URLs. The ``sign`` command now auto-detects the key type from the PEM header and supports both RSA and ECDSA private keys."
+}
