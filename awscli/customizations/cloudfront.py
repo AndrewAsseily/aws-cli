@@ -79,7 +79,7 @@ def register(event_handler):
 
 
 def unique_string(prefix='cli'):
-    return '%s-%s-%s' % (prefix, int(time.time()), random.randint(1, 1000000))
+    return f'{prefix}-{int(time.time())}-{random.randint(1, 1000000)}'
 
 
 def _add_paths(argument_table, **kwargs):
@@ -93,7 +93,7 @@ class PathsArgument(CustomArgument):
             'The space-separated paths to be invalidated.'
             ' Note: --invalidation-batch and --paths are mutually exclusive.'
         )
-        super(PathsArgument, self).__init__('paths', nargs='+', help_text=doc)
+        super().__init__('paths', nargs='+', help_text=doc)
 
     def add_to_params(self, parameters, value):
         if value is not None:
@@ -114,9 +114,7 @@ class ExclusiveArgument(CustomArgument):
         help_text='',
     ):
         argument_table[exclusive_to].required = False
-        super(ExclusiveArgument, self).__init__(
-            name, help_text=self.DOC % (help_text, exclusive_to)
-        )
+        super().__init__(name, help_text=self.DOC % (help_text, exclusive_to))
 
     def distribution_config_template(self):
         return {
@@ -139,7 +137,7 @@ class ExclusiveArgument(CustomArgument):
 
 class OriginDomainName(ExclusiveArgument):
     def __init__(self, argument_table):
-        super(OriginDomainName, self).__init__(
+        super().__init__(
             'origin-domain-name',
             argument_table,
             help_text='The domain name for your origin.',
@@ -175,7 +173,7 @@ class OriginDomainName(ExclusiveArgument):
 
 class CreateDefaultRootObject(ExclusiveArgument):
     def __init__(self, argument_table, help_text=''):
-        super(CreateDefaultRootObject, self).__init__(
+        super().__init__(
             'default-root-object',
             argument_table,
             help_text=help_text
@@ -195,7 +193,7 @@ class CreateDefaultRootObject(ExclusiveArgument):
 
 class UpdateDefaultRootObject(CreateDefaultRootObject):
     def __init__(self, context, argument_table):
-        super(UpdateDefaultRootObject, self).__init__(
+        super().__init__(
             argument_table,
             help_text=(
                 'The object that you want CloudFront to return (for example, '
@@ -257,7 +255,7 @@ class SignCommand(BasicCommand):
             'help_text': (
                 'file://path/to/your/private-key.pem. '
                 'Supported key types: RSA (PKCS#1 or PKCS#8) and '
-                'ECDSA (SEC1/PEM).'
+                'ECDSA (SEC1 or PKCS#8).'
             ),
         },
         {
@@ -314,27 +312,33 @@ def create_signer_from_key(private_key):
     if 'BEGIN RSA PRIVATE KEY' in private_key:
         return RSASigner(private_key).sign
     if 'BEGIN PRIVATE KEY' in private_key:
-        return RSASigner(private_key).sign
+        return _create_signer_from_pkcs8(private_key)
     raise ValueError(
         "Unsupported key type. Supported formats: "
-        "RSA (PKCS#1 or PKCS#8) and EC (SEC1). "
+        "RSA (PKCS#1 or PKCS#8) and EC (SEC1 or PKCS#8). "
         "Check that your key file has a valid PEM header."
+    )
+
+
+def _create_signer_from_pkcs8(private_key):
+    try:
+        return RSASigner(private_key).sign
+    except (RuntimeError, ValueError):
+        pass
+    try:
+        return ECDSASigner(private_key).sign
+    except (RuntimeError, ValueError):
+        pass
+    raise ValueError(
+        "Failed to load PKCS#8 private key as either RSA or EC. "
+        "Check that your key file is a valid private key in PKCS#8 format."
     )
 
 
 class RSASigner:
     def __init__(self, private_key):
         key_bytes = private_key.encode('utf8')
-        try:
-            self.priv_key = RSA.new_private_key_from_pem_data(key_bytes)
-        except RuntimeError as e:
-            if 'AWS_ERROR_CAL_UNSUPPORTED_KEY_FORMAT' in str(e):
-                raise ValueError(
-                    "Failed to load private key. If you are using an ECDSA "
-                    "key in PKCS#8 format (BEGIN PRIVATE KEY), it may need "
-                    "to be converted to SEC1 format (BEGIN EC PRIVATE KEY)."
-                ) from e
-            raise
+        self.priv_key = RSA.new_private_key_from_pem_data(key_bytes)
 
     def sign(self, message):
         return self.priv_key.sign(
@@ -343,14 +347,32 @@ class RSASigner:
 
 
 class ECDSASigner:
+    _P256_COORDINATE_LENGTH = 32
+
     def __init__(self, private_key):
-        # Strip PEM headers and decode base64 to get raw DER bytes
         lines = private_key.strip().splitlines()
         der_b64 = ''.join(
             line for line in lines if not line.startswith('-----')
         )
-        der_data = base64.b64decode(der_b64)
-        self.priv_key = EC.new_key_from_der_data(der_data)
+        try:
+            der_data = base64.b64decode(der_b64)
+        except Exception as e:
+            raise ValueError(
+                "Failed to decode EC private key: invalid base64 content."
+            ) from e
+        try:
+            self.priv_key = EC.new_key_from_der_data(der_data)
+        except (ValueError, RuntimeError) as e:
+            raise ValueError(
+                "Failed to load EC private key. Ensure the key is a valid "
+                "EC private key in SEC1 or PKCS#8 DER format."
+            ) from e
+        coords = self.priv_key.get_public_coords()
+        if len(coords.x) != self._P256_COORDINATE_LENGTH:
+            raise ValueError(
+                "Only P-256 EC keys are supported for CloudFront signing. "
+                "The provided key appears to use a different curve."
+            )
 
     def sign(self, message):
         return self.priv_key.sign(hashlib.sha256(message).digest())

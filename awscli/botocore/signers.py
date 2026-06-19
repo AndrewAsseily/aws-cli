@@ -366,7 +366,7 @@ class CloudFrontSigner:
             return rsa.sign(
                 message,
                 rsa.PrivateKey.load_pkcs1(private_key.encode('utf8')),
-                'SHA-1')  # CloudFront requires SHA-1 hash
+                'SHA-1')  # RSA uses SHA-1; ECDSA (P-256) uses SHA-256
         cf_signer = CloudFrontSigner(key_id, rsa_signer)
 
     To sign with a canned policy::
