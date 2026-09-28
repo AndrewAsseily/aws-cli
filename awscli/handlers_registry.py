@@ -677,6 +677,10 @@ PLUGIN_REGISTRY = {
         ('awscli.customizations.history', 'register_history_commands'),
         ('awscli.customizations.devcommands', 'register_dev_commands'),
         ('awscli.customizations.login', 'register_login_cmds'),
+        (
+            'awscli.customizations.multirolelogin',
+            'register_multirole_login',
+        ),
         ('awscli.customizations.update', 'register_update_command'),
     ],
     'building-command-table.polly': [
@@ -901,6 +905,12 @@ MAIN_COMMAND_TABLE_OPS: list[
         'login',
         'awscli.customizations.login.login',
         'LoginCommand',
+    ),
+    (
+        CommandTableOp.ADD,
+        'multirole-login',
+        'awscli.customizations.multirolelogin',
+        'MultiRoleLoginCommand',
     ),
     (
         CommandTableOp.ADD,
